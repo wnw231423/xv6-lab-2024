@@ -1,0 +1,6 @@
+Q1: usertrap() at kernel/trap.c called syscall
+Q2: 0x7, which is SYS_exec
+Q3: User mode. Since my $sstatus is 0x200000022, the SSP bit is zero.
+Q4: at sepc(0x80001c6c). reg a2 correspounds to the variable num
+Q5: scause=0xd, which means load page fault.
+Q6: initcode, pid=1
