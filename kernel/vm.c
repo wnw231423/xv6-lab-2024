@@ -117,6 +117,37 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   return &pagetable[PX(0, va)];
 }
 
+// to get level-1 pte instead of level-0
+pte_t *
+superwalk(pagetable_t pagetable, uint64 va, int alloc)
+{
+  if(va >= MAXVA)
+    panic("walk");
+
+  // get the level-2 pte
+  pte_t *pte = &pagetable[PX(2, va)];
+
+  if(*pte & PTE_V) {
+    // get the level-1 pagetable
+    pagetable = (pagetable_t)PTE2PA(*pte);
+
+#ifdef LAB_PGTBL
+    if(PTE_LEAF(*pte)) {
+      return pte;
+    }
+#endif
+  } else {
+    if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      return 0;
+    // alloc the level-1 pagetable if it is not valid.
+    memset(pagetable, 0, PGSIZE);
+    // change the level-2 pte to valid one.
+    *pte = PA2PTE(pagetable) | PTE_V;
+  }
+
+  return &pagetable[PX(1, va)];
+}
+
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
@@ -187,6 +218,25 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+// map 1 super page.
+int
+mapsuperpage(pagetable_t pagetable, uint64 va, uint64 pa, int perm)
+{
+  printf("Debug: enter mapsuperpage.\n");
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("mappages: va not aligned");
+  
+  if((pte = superwalk(pagetable, va, 1)) == 0)
+    return -1;
+  if(*pte & PTE_V)
+    panic("mappages: remap in mapsuperpage");
+  *pte = PA2PTE(pa) | perm | PTE_V;
+
+  return 0;
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -212,7 +262,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if(pa >= SUPERBASE){
+        superfree((void*)pa);
+        a += SUPERPGSIZE;
+        a -= sz;
+      }else{
+        kfree((void*)pa);
+      }
     }
     *pte = 0;
   }
@@ -261,7 +317,42 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     return oldsz;
 
   oldsz = PGROUNDUP(oldsz);
-  for(a = oldsz; a < newsz; a += sz){
+  // fill the current oldsz page to a superpage if needed.
+  // make sure the vm addrs are continuous.
+  for(a = oldsz; a < newsz && a < SUPERPGROUNDUP(oldsz); a += sz){
+    sz = PGSIZE;
+    mem = kalloc();
+    if(mem == 0){
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+#ifndef LAB_SYSCALL
+    memset(mem, 0, sz);
+#endif
+    if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      kfree(mem);
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+  }
+
+  // alloc superpage
+  for (;a + SUPERPGSIZE < newsz; a += sz){
+    sz = SUPERPGSIZE;
+    mem = superalloc();
+    if(mem == 0){
+      uvmdealloc(pagetable, a, oldsz);
+    }
+    memset(mem, 0, sz);
+    if(mapsuperpage(pagetable, a, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      superfree(mem);
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+  }
+
+  // alloc remain part less than a supersize
+  for(; a < newsz; a += sz){
     sz = PGSIZE;
     mem = kalloc();
     if(mem == 0){
@@ -345,19 +436,30 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += szinc){
     szinc = PGSIZE;
-    szinc = PGSIZE;
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    if(pa < SUPERBASE){
+      if((mem = kalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, PGSIZE);
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        goto err;
+      }
+    }else{
+      if((mem = superalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, SUPERPGSIZE);
+      if(mapsuperpage(new, i, (uint64)mem, flags) != 0){
+        superfree(mem);
+        goto err;
+      }
+      i += SUPERPGSIZE;
+      i -= szinc;
     }
   }
   return 0;

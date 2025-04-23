@@ -21,13 +21,17 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem, supermem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  initlock(&supermem.lock, "supermem");
+  freerange(end, (void*)SUPERBASE);
+  char *p = (char*)SUPERPGROUNDUP((uint64)SUPERBASE);
+  for(; p + SUPERPGSIZE <= (char*)PHYSTOP; p += SUPERPGSIZE)
+    superfree(p);
 }
 
 void
@@ -78,5 +82,40 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
+}
+
+void
+superfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (uint64)pa < SUPERBASE || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, SUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&supermem.lock);
+  r->next = supermem.freelist;
+  supermem.freelist = r;
+  release(&supermem.lock);
+}
+
+void *
+superalloc(void)
+{
+  struct run *r;
+
+  acquire(&supermem.lock);
+  r = supermem.freelist;
+  if(r)
+    supermem.freelist = r->next;
+  release(&supermem.lock);
+
+  if(r)
+    memset((char*)r, 5, SUPERPGSIZE); // fill with junk
   return (void*)r;
 }
