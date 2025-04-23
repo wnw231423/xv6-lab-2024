@@ -1,4 +1,5 @@
 # Inspcect a user-process page table
+
 ```
 $ pgtbltest
 print_pgtbl starting
@@ -27,6 +28,7 @@ ugetpid_test starting
 usertrap(): unexpected scause 0xd pid=4
             sepc=0x57a stval=0x3fffffd000
 ```
+
 1. va 0x0, pte 0x21FC885B.
     - PPN: (pte >> 10) << 12. 0x87F22
     - Offset: 000
@@ -43,3 +45,11 @@ usertrap(): unexpected scause 0xd pid=4
     - Flags: 00,1100,0111 -> VRWDA (trapframe)
 7. ...
     - Flags: 00,0100,1011 -> VRXA (trampoline)
+
+# Use superpages
+
+Some keypoints:
+
+1. `uvmcopy` copies pagetable in size continuously, which means that in a process's vm space, if you alloc less than 2MB and you want to alloc superpages, you should first fill the space between oldsz, after which the memory is superpage aligned and continuous. If you don't fill up the fragments, `uvmcopy`would work wrong.
+2. you should define a way to get the level-1 PTE instead of level-0 PTE, I defined a `superwalk`. Except this, `walk` can be used generally to get the right PTE since it use `PTE_LEAF` to dynamically detect if one PTE points to a pyhsical mem rather than a pagetable whatever the level of the PTE is.
+3. `mappages` is used so commonly that it's really hard to modify it. Our superpage only works during process `sbrk` and under the condition, mappages are used to map only one page at a time. But in other cases like OS's initial work, it's used to map a range of pages. So I defined a `mapsuperpage`, which is only used in `sbrk` situation. I think it better to separate the general-use `mappages` from the situation specified function `mapsuperpage`.

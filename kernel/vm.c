@@ -222,7 +222,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 int
 mapsuperpage(pagetable_t pagetable, uint64 va, uint64 pa, int perm)
 {
-  printf("Debug: enter mapsuperpage.\n");
+  // printf("Debug: enter mapsuperpage.\n");
   pte_t *pte;
 
   if((va % PGSIZE) != 0)
