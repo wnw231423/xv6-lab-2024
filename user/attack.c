@@ -9,12 +9,11 @@ main(int argc, char *argv[])
   // your code here.  you should write the secret to fd 2 using write
   // (e.g., write(2, secret, 8)
   while (1) {
-    char *end = sbrk(PGSIZE);
-    *(end+31) = '\0';
-    if (strcmp(end, "my very very very secret pw is ") == 0) {
-      write(2, end+32, 8);
-      break;
-    }
+    char *end = sbrk(17*PGSIZE);
+    end = end + 16*PGSIZE;
+    end = end + 32;
+    write(2, end, 8);
+    exit(1);
   }
   exit(1);
 }
