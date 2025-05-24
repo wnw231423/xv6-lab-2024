@@ -101,8 +101,30 @@ e1000_transmit(char *buf, int len)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after send completes.
   //
+  acquire(&e1000_lock);
+  uint32 tx_tail = regs[E1000_TDT];
+  // Check works
+  if (!(tx_ring[tx_tail].status & E1000_TXD_STAT_DD)) {
+    printf("No free buffer space.\n");
+    release(&e1000_lock);
+    return -1;
+  }
 
-  
+  // free the previous buffer to be used.
+  if (tx_bufs[tx_tail] != 0) {
+    kfree(tx_bufs[tx_tail]);
+  }
+
+  tx_ring[tx_tail].addr = (uint64)buf;
+  tx_ring[tx_tail].length = len;
+  tx_ring[tx_tail].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+
+  tx_bufs[tx_tail] = buf;
+
+  regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
+
   return 0;
 }
 
@@ -114,8 +136,21 @@ e1000_recv(void)
   //
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
-  //
+  uint32 hd = (regs[E1000_RDT]+1)%RX_RING_SIZE;
+  while(rx_ring[hd].status&E1000_RXD_STAT_DD){
+    acquire(&e1000_lock);
+    struct rx_desc *todo = &rx_ring[hd];
+    char *buf = (char*)todo->addr;
+    int len = todo->length;
 
+    todo->addr = (uint64)kalloc();
+    todo->status = 0;
+    regs[E1000_RDT] = hd;
+    hd = (hd+1)%RX_RING_SIZE;
+    release(&e1000_lock);
+
+    net_rx(buf, len);
+  }
 }
 
 void
